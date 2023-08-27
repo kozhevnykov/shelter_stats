@@ -1,3 +1,6 @@
+import pandas as pd
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 import os
 import re
 import operator
@@ -8,10 +11,18 @@ game_stopped = re.compile("((?:\d+\.?){3} \d+:\d+:\d+.\d) : Game stopped")
 betterlogs = re.compile(
     "(?:\d+\.?){3} \d+:\d+:\d+.\d : 💡 BetterLogs: Joined player.* id: (\d+), name: (.*), ip: \d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}, auth: (.+)")
 chatline = re.compile("(?:\d+\.?){3} \d+:\d+:\d+.\d : .*#\d+ : .*")
-score_limit = re.compile("(?:\d+\.?){3} \d+:\d+:\d+.\d : 📢 : (.+)🏆 Лимит по очкам! .*")
-time_limit = re.compile("(?:\d+\.?){3} \d+:\d+:\d+.\d : 📢 : (.+)🏆 Время вышло.*")
+team_win_match = re.compile("(?:\d+\.?){3} \d+:\d+:\d+.\d : (\w{3,4}) team won the match")
 player_side = re.compile("(?:\d+\.?){3} \d+:\d+:\d+.\d : (.*) was moved to (\w{3,4})$")
 
+def results_to_sheet(df):
+    scope = ['https://spreadsheets.google.com/feeds','https://www.googleapis.com/auth/spreadsheets',
+             'https://www.googleapis.com/auth/drive.file','https://www.googleapis.com/auth/drive']
+    creds = ServiceAccountCredentials.from_json_keyfile_name('shelter-elo-f89a18b95341.json', scope)
+    client = gspread.authorize(creds)
+    sheet = client.open('Shelter stats')
+    sheet_instance = sheet.get_worksheet(1)
+    sheet_instance.clear()
+    sheet_instance.insert_rows([df.columns.values.tolist()] + (df.values.tolist()), 1)
 
 def processing_nick(line):
     if betterlogs.match(line):
@@ -25,7 +36,6 @@ def processing_nick(line):
             else:
                 players[auth][nick] = 1
 
-
 def starting_lineup(match):
     players = {'Red': [], 'Blue': []}
     for event in match:
@@ -35,53 +45,31 @@ def starting_lineup(match):
             players[player_side.match(event).group(2)].append(player_side.match(event).group(1).strip())
     return players
 
-
 def match_result(match):
     winner = 0
-    the_event = match[-1]
     for m in reversed(match):
-        if score_limit.match(m) or time_limit.match(m):
-            the_event = m
+        if team_win_match.match(m):
+            if team_win_match.match(m).group(1) == "Red":
+                winner = 2
+            else:
+                winner = 1
             break
-
-    if score_limit.match(the_event):
-        if score_limit.match(the_event).group(1) == "🔵":
-            winner = 2
-        else:
-            winner = 1
-    elif time_limit.match(the_event):
-        if time_limit.match(the_event).group(1) == "🔵":
-            winner = 2
-        else:
-            winner = 1
     return winner
 
-
-def get_goals(match, players):
-    goals = {p: 0 for p in players}
-    for line in match:
-        for name in sorted(players, key=len, reverse=True):
-            if '⚽' + name in line and "| Автогол |" not in line:
-                goals[name] += 1
-                break
-    return goals
-
-
 def get_stats(winner, players, m):
-    player_stats = {p: {'goals': 0, 'wins': 0} for p in players['Red'] + players['Blue']}
-    if winner > 0 and len(players['Red']) == 4:
+    player_stats = {p: {'wins': 0} for p in players['Red'] + players['Blue']}
+    # TODO: add condition when match not over properly
+    if winner > 0 and len(players['Red']) == 1:
         if winner == 1:
-            for p in players['Red']:
-                player_stats[p]['wins'] += 1
+            player_stats[players['Red'][0]]['wins'] += 1
         else:
-            for p in players['Blue']:
-                player_stats[p]['wins'] += 1
+            player_stats[players['Blue'][0]]['wins'] += 1
 
-        goals = get_goals(m, players['Red'] + players['Blue'])
-        for p in goals.keys():
-            player_stats[p]['goals'] += goals[p]
+        # goals = get_goals(m, players['Red'] + players['Blue'])
+        # for p in goals.keys():
+        #     player_stats[p]['goals'] += goals[p]
     else:
-        return {'status': '!4x4'}
+        return {'status': '!1v1'}
 
     player_stats_auth = {}
     for k, v in player_stats.items():
@@ -89,14 +77,12 @@ def get_stats(winner, players, m):
             player_stats_auth[stack_players[k].strip()] = v
     return {'stats': player_stats_auth}
 
-
 def analyse_match():
     match = current_match['logs']
     match_players = starting_lineup(match)
     match_winner = match_result(match)
     match_stats = get_stats(match_winner, match_players, match)
     current_match.update(match_stats)
-
 
 def processing(line):
     global match_id, current_match, db_matches
@@ -126,24 +112,26 @@ def processing(line):
         stack_players[nickname] = auth_key
 
 def ELO_calc(match_stats):
-    win_elo = 0
-    lose_elo = 0
     K = 30
     for auth, stats in match_stats:
         if 'elo' not in users[users_invert[auth]].keys():
             users[users_invert[auth]]['elo'] = [1000]
-        win_elo += stats['wins'] * users[users_invert[auth]]['elo'][-1]
-        lose_elo += (1 - stats['wins']) * users[users_invert[auth]]['elo'][-1]
+        if stats['wins'] == 1:
+            win_elo = users[users_invert[auth]]['elo'][-1]
+        else:
+            lose_elo = users[users_invert[auth]]['elo'][-1]
+
+    E = 1 / (1 + 10 ** ((lose_elo - win_elo) / 400))
+    #print(E, win_elo, lose_elo)
+
     for auth, stats in match_stats:
         if stats['wins'] == 1:
-            E = 1 / (1+10 ** ((lose_elo/4 - users[users_invert[auth]]['elo'][-1])/400))
             users[users_invert[auth]]['elo'].append(round(users[users_invert[auth]]['elo'][-1] + K * (1 - E)))
         else:
-            E = 1 / (1+10 ** ((win_elo/4 - users[users_invert[auth]]['elo'][-1])/400))
             users[users_invert[auth]]['elo'].append(round(users[users_invert[auth]]['elo'][-1] + K * (0 - E)))
-    if 1 / (1+10 ** ((lose_elo/4 - win_elo/4)/400)) >= 0.5:
-        return 1
-    return 0
+
+    #print(K * (1 - E), K * (0 - E))
+
 
 if __name__ == '__main__':
     match_id = 0
@@ -153,7 +141,7 @@ if __name__ == '__main__':
     players = {}
 
     folder = 'vps-logs--ua-1-1--2/hax/out'
-    for filename in sorted(os.listdir(folder)):
+    for filename in [f for f in sorted(os.listdir(folder)) if f > 'out__2023-08-21_23-59-00.log']:
         f = os.path.join(folder, filename)
         if filename == '.DS_Store':
             continue
@@ -166,32 +154,28 @@ if __name__ == '__main__':
     stats = {}
     for match in db_matches:
         for auth, match_stats in match['stats'].items():
-            if (match['start_at'].strftime('%Y-%m') , auth) not in stats.keys():
-                stats[(match['start_at'].strftime('%Y-%m') , auth)] = {
-                        'goals' : match_stats['goals'],
-                        'matches' : 1,
-                        'wins' : match_stats['wins'],
-                        'duration' : match['stopped_at'] - match['start_at']
-                    }
+            if auth not in stats.keys():
+                stats[auth] = {
+                    'matches': 1,
+                    'wins': match_stats['wins'],
+                }
             else:
-                stats[(match['start_at'].strftime('%Y-%m') , auth)]['goals'] += match_stats['goals']
-                stats[(match['start_at'].strftime('%Y-%m') , auth)]['matches'] += 1
-                stats[(match['start_at'].strftime('%Y-%m') , auth)]['wins'] += match_stats['wins']
-                stats[(match['start_at'].strftime('%Y-%m') , auth)]['duration'] += (match['stopped_at'] - match['start_at'])
+                stats[auth]['matches'] += 1
+                stats[auth]['wins'] += match_stats['wins']
     # players = players['8zC-sxowXUIMFKZ2seldvc1vegZo'] = {'Roll.': 6, 'osa': 1,}
     # db_matches = [...]
 
     users = {}
     for k, v in dict(sorted(players.items(), key=lambda item: sum(item[1].values()),
-                           reverse=True)).items():
+                            reverse=True)).items():
         if max(v.items(), key=operator.itemgetter(1))[0] not in users.keys():
             users[max(v.items(), key=operator.itemgetter(1))[0]] = {
-                'idkeys' : [k],
-                'visits' : sum(v.values())}
+                'idkeys': [k],
+                'visits': sum(v.values())}
         else:
             users[max(v.items(), key=operator.itemgetter(1))[0]]['idkeys'].append(k)
             users[max(v.items(), key=operator.itemgetter(1))[0]]['visits'] += sum(v.values())
-        if sum(v.values()) < 15:
+        if sum(v.values()) < 2:
             break
 
     users_invert = {}
@@ -199,30 +183,33 @@ if __name__ == '__main__':
         for idkey in data['idkeys']:
             users_invert[idkey] = nick
 
-    #users - users['Mobley'] = {'idkeys': ['RAUkZskkzWKTno6S9mXi6KCgxHu6sdttDFPc...', '...'], 'visits': 716}
-    #users_invert - users_invert['zC-sxowXUIMFKZ2'] = 'Mobley'
-
-    counter = 0
-    quess_counter = 0
     for match in db_matches:
         flag = True
-        if len(match['stats'].keys()) == 8:
+        if len(match['stats'].keys()) == 2:
             for auth in match['stats'].keys():
                 if auth not in users_invert.keys():
                     flag = False
                     break
             if flag:
-                counter += 1
-                quess_counter += ELO_calc(match['stats'].items())
-    print(quess_counter/counter)
+                ELO_calc(match['stats'].items())
 
-    with open('dataHAX/stats_by_month_{0}.csv'.format(datetime.now()), 'w') as f:
-        f.write('date, nickname, goals, matches, wins, spent_h\n')
-        for k , v in stats.items():
-            if k[1] in users_invert.keys():
-                f.write('%s, "%s", %s, %s, %s, %s\n' % (k[0], users_invert[k[1]],
-                                                  v['goals'], v['matches'],
-                                                  v['wins'], round(v['duration'].total_seconds() / 3600)
-                                                 ))
+    for k in stats.keys():
+        try:
+            stats[k]['elo'] = users[users_invert[k]]['elo'][-1]
+            stats[k]['nick'] = users_invert[k]
+            stats[k]['win-rate %'] = stats[k]['wins'] / stats[k]['matches']
+        except:
+            pass
 
-    # https://github.com/K0nfy/vps-logs--ua-1-1--2/tree/47b54b4ced8d11935a717eb6ef44e515b3d25803/hax/out
+    import pandas as pd
+    df = pd.DataFrame(stats).T.sort_values(by=['elo'], ascending=False, ignore_index=True)
+    df = df[['nick', 'elo', 'matches', 'win-rate %']]
+    #results_to_sheet(df[df['elo'] > 0 ])
+
+import pprint
+pprint.pprint(db_matches)
+
+for match in db_matches:
+    print(match['id'], match['stats'])
+
+

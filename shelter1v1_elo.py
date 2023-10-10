@@ -4,7 +4,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 import os, re
 import operator
 from datetime import datetime
-import pprint
+from pprint import pprint
 
 
 game_started = re.compile("((?:\d+\.?){3} \d+:\d+:\d+.\d) : Game started")
@@ -17,15 +17,33 @@ team_win_match = re.compile("(?:\d+\.?){3} \d+:\d+:\d+.\d : (\w{3,4}) team won t
 player_side = re.compile("(?:\d+\.?){3} \d+:\d+:\d+.\d : (.*) was moved to (\w{3,4})$")
 goal_line = re.compile("(?:\d+\.?){3} \d+:\d+:\d+.\d : 📢 : (.+) Гол для (.*)! \| (.*)")
 
-def results_to_sheet(df):
+def results_to_sheet(df, worksheet=1):
     scope = ['https://spreadsheets.google.com/feeds','https://www.googleapis.com/auth/spreadsheets',
              'https://www.googleapis.com/auth/drive.file','https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_name('shelter-elo-f89a18b95341.json', scope)
     client = gspread.authorize(creds)
     sheet = client.open('Shelter stats')
-    sheet_instance = sheet.get_worksheet(1)
+    sheet_instance = sheet.get_worksheet(worksheet)
     sheet_instance.clear()
-    sheet_instance.insert_rows([df.columns.values.tolist()] + (df.values.tolist()), 1)
+    sheet_instance.insert_rows([[str(f'last update: {datetime.now()}')]] + [df.columns.values.tolist()] + df.values.tolist(), 1)
+    sheet_instance.format("A2:I2", {
+        "backgroundColor": {
+            "red": 0.6,
+            "green": 0.0,
+            "blue": 0.0
+        },
+        "horizontalAlignment": "CENTER",
+        "textFormat": {
+            "foregroundColor": {
+                "red": 1.0,
+                "green": 1.0,
+                "blue": 1.0
+            },
+            "fontSize": 10,
+            "bold": True
+        }
+    })
+    print('SHELO UPDATED')
 
 def processing_nick(line):
     if betterlogs.match(line):
@@ -104,7 +122,7 @@ def processing(line):
         current_match['stopped_at'] = datetime.strptime(game_stopped.match(line).group(1),
                                                         '%d.%m.%Y %H:%M:%S.%f')
         analyse_match()
-        del (current_match['logs'])
+        #del (current_match['logs'])
         if current_match['status'] == 'stopped':
             db_matches.append(current_match)
         match_id += 1
@@ -156,8 +174,7 @@ def get_stats_from_db_matches(db_matches):
                 stats[auth]['wins'] += match_stats['wins']
     return stats
 
-
-def ELO_calc(match_stats, k=30):
+def elo_calc(match_stats, k=30):
     e1 = users[users_invert[match_stats[0][0]]]['elo'][-1]
     e2 = users[users_invert[match_stats[1][0]]]['elo'][-1]
 
@@ -172,51 +189,101 @@ def ELO_calc(match_stats, k=30):
 
     # print([e1,e2],[ne1,ne2], p1, p2, {match_stats[0][0], match_stats[1][0]})
 
+def win_streak_calc(elos):
+    base = 0
+    current = 0
+    if len(elos) > 1:
+        for i in range(len(elos)-1):
+            if elos[i] <= elos[i+1]:
+                current += 1
+            else:
+                if base < current:
+                    base = current
+                current = 0
+    return max(base, current)
+
 
 if __name__ == '__main__':
     match_id = 0
+    min_matches = 10
     current_match = {'status': '', 'id': -1, 'logs': []}
     db_matches = []
     stack_players = {}
     players = {}
 
     folder = 'vps-logs--ua-1-1--2/hax/out'
-    for filename in [f for f in sorted(os.listdir(folder)) if f >= 'out__2023-08-21_23-59-00.log']:
+    for filename in [f for f in sorted(os.listdir(folder)) if f >= 'out__2023-08-23_23-59-00.log']:
         f = os.path.join(folder, filename)
         if filename == '.DS_Store':
             continue
         with open(f, 'r', encoding='utf-8') as file:
             for line in file:
                 processing(line)
-
-    print(f' matches - {len(db_matches)}, players - {len(players)}')
+    print(f'ALL matches - {len(db_matches)}, players - {len(players)}')
 
     stats = get_stats_from_db_matches(db_matches)
     users, users_invert = get_users_from_players(players)
+    blacklist = {'Vh2iYyJEP3DxxnmDTBwMe1fxbm47EhbttdHEsUVaIOA': 'l1ch',
+                 'ZSswQ-TZL1HV7QXnMTmoXGXNVbmHEo84MIJ_bmdMkDI': 'l1ch',}
 
     # calculating elo for each match
-    for match in db_matches:
+    for i in range(len(db_matches)):
+        m = db_matches[i]
         good_match = True
-        if len(match['stats'].keys()) != 2:
+        if len(m['stats'].keys()) != 2:
             good_match = False
-        for auth in match['stats'].keys():
-            if auth not in users_invert.keys():
+        for auth in m['stats'].keys():
+            if auth not in users_invert.keys() or stats[auth]['matches'] < min_matches or auth in blacklist.keys():
                 good_match = False
-            if stats[auth]['matches'] < 5:
-                good_match = False
+            # if auth == 'nzaKskHI':
+            #     pprint.pprint(m)
         if good_match:
-            ELO_calc(list(match['stats'].items()))
+            db_matches[i]['status'] = 'ELO stopped'
+            for idkey in db_matches[i]['stats']:
+                db_matches[i]['stats'][idkey]['elo_begin'] = users[users_invert[idkey]]['elo'][-1]
+            elo_calc(list(m['stats'].items()))
+            for idkey in db_matches[i]['stats']:
+                db_matches[i]['stats'][idkey]['elo_end'] = users[users_invert[idkey]]['elo'][-1]
+                db_matches[i]['stats'][idkey]['elo_diff'] = (db_matches[i]['stats'][idkey]['elo_end'] -
+                                                             db_matches[i]['stats'][idkey]['elo_begin'])
 
+    for user in users:
+        users[user]['NICK'] = user
+        users[user]['ELO'] = users[user]['elo'][-1]
+        users[user]['ELO_matches'] = len(users[user]['elo']) - 1
+        users[user]['ALL matches'] = 0
+        users[user]['wins'] = 0
+        users[user]['win-streak'] = win_streak_calc(users[user]['elo'])
+        for idkey in users[user]['idkeys']:
+            if idkey in stats.keys():
+                users[user]['ALL matches'] += stats[idkey]['matches']
+                users[user]['wins'] += stats[idkey]['wins']
+        if users[user]['ALL matches'] > 0:
+            users[user]['ALL win-rate %'] = users[user]['wins'] / users[user]['ALL matches']
+        else:
+            users[user]['ALL win-rate %'] = None
 
-    for auth in stats.keys():
-        stats[auth]['ELO'] = users[users_invert[auth]]['elo'][-1]
-        stats[auth]['NICK'] = users_invert[auth]
-        stats[auth]['ALL win-rate %'] = stats[auth]['wins'] / stats[auth]['matches']
-        stats[auth]['ELO_matches'] = len(users[users_invert[auth]]['elo']) - 1
-        stats[auth]['ALL matches'] = stats[auth]['matches']
+    df = pd.DataFrame(users).T.sort_values(by=['ELO'], ascending=False, ignore_index=True)
+    df = df[['NICK','ELO', 'ELO_matches', 'ALL win-rate %', 'win-streak']]
 
+    df2 = pd.DataFrame({'id':[], 'started_at': [],
+                        'p1': [], 'p1_elo_begin': [], 'p1_elo_diff': [],
+                        'p2': [], 'p2_elo_begin': [], 'p2_elo_diff': []})
+    for m in db_matches:
+        if m['status'] == 'ELO stopped':
+            df2.loc[len(df2)] = [m['id'], m['start_at'].strftime('%d.%m.%Y'),
+                            users[users_invert[list(m['stats'].keys())[0]]]['NICK'],
+                            m['stats'][list(m['stats'].keys())[0]]['elo_begin'],
+                            m['stats'][list(m['stats'].keys())[0]]['elo_diff'],
+                            users[users_invert[list(m['stats'].keys())[1]]]['NICK'],
+                            m['stats'][list(m['stats'].keys())[1]]['elo_begin'],
+                            m['stats'][list(m['stats'].keys())[1]]['elo_diff']]
 
-    df = pd.DataFrame(stats).T.sort_values(by=['ELO'], ascending=False, ignore_index=True)
-    df = df[['NICK', 'ELO', 'ELO_matches', 'ALL win-rate %', 'ALL matches']]
+    df2 = df2.sort_values(by=['id'], ignore_index=True)
 
-    results_to_sheet(df[df['ALL matches'] > 4 ])
+    results_to_sheet(df[df['ELO_matches'] >= min_matches])
+    results_to_sheet(df2, worksheet=2)
+
+    # import matplotlib.pyplot as plt
+    # plt.plot(users['корg']['elo'])
+    # plt.show()

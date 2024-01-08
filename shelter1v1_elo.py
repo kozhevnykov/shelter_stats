@@ -22,14 +22,14 @@ def results_to_sheet(df, worksheet=1):
              'https://www.googleapis.com/auth/drive.file','https://www.googleapis.com/auth/drive']
     creds = ServiceAccountCredentials.from_json_keyfile_name('shelter-elo-f89a18b95341.json', scope)
     client = gspread.authorize(creds)
-    sheet = client.open('Shelter stats')
+    sheet = client.open('UA PUB haxball statistics')
     sheet_instance = sheet.get_worksheet(worksheet)
     sheet_instance.clear()
     sheet_instance.insert_rows([[str(f'last update: {datetime.now()}')]] + [df.columns.values.tolist()] + df.values.tolist(), 1)
-    sheet_instance.format("A2:I2", {
+    sheet_instance.format("A2:E2", {
         "backgroundColor": {
             "red": 0.6,
-            "green": 0.0,
+            "green": 0.1,
             "blue": 0.0
         },
         "horizontalAlignment": "CENTER",
@@ -43,7 +43,7 @@ def results_to_sheet(df, worksheet=1):
             "bold": True
         }
     })
-    print('SHELO UPDATED')
+    print(f'ELO worksheet {worksheet} updated')
 
 def processing_nick(line):
     if betterlogs.match(line):
@@ -205,14 +205,14 @@ def win_streak_calc(elos):
 
 if __name__ == '__main__':
     match_id = 0
-    min_matches = 10
+    min_matches = 3
     current_match = {'status': '', 'id': -1, 'logs': []}
     db_matches = []
     stack_players = {}
     players = {}
 
     folder = 'vps-logs--ua-1-1--2/hax/out'
-    for filename in [f for f in sorted(os.listdir(folder)) if f >= 'out__2023-08-23_23-59-00.log']:
+    for filename in [f for f in sorted(os.listdir(folder)) if f >= 'out__2023-12-23_23-59-00.log']:
         f = os.path.join(folder, filename)
         if filename == '.DS_Store':
             continue
@@ -223,8 +223,7 @@ if __name__ == '__main__':
 
     stats = get_stats_from_db_matches(db_matches)
     users, users_invert = get_users_from_players(players)
-    blacklist = {'Vh2iYyJEP3DxxnmDTBwMe1fxbm47EhbttdHEsUVaIOA': 'l1ch',
-                 'ZSswQ-TZL1HV7QXnMTmoXGXNVbmHEo84MIJ_bmdMkDI': 'l1ch',}
+    blacklist = {}
 
     # calculating elo for each match
     for i in range(len(db_matches)):
@@ -266,12 +265,12 @@ if __name__ == '__main__':
     df = pd.DataFrame(users).T.sort_values(by=['ELO'], ascending=False, ignore_index=True)
     df = df[['NICK','ELO', 'ELO_matches', 'ALL win-rate %', 'win-streak']]
 
-    df2 = pd.DataFrame({'id':[], 'started_at': [],
+    df_elo_matches = pd.DataFrame({'id':[], 'started_at': [],
                         'p1': [], 'p1_elo_begin': [], 'p1_elo_diff': [],
                         'p2': [], 'p2_elo_begin': [], 'p2_elo_diff': []})
     for m in db_matches:
         if m['status'] == 'ELO stopped':
-            df2.loc[len(df2)] = [m['id'], m['start_at'].strftime('%d.%m.%Y'),
+            df_elo_matches.loc[len(df_elo_matches)] = [m['id'], m['start_at'].strftime('%d.%m.%Y'),
                             users[users_invert[list(m['stats'].keys())[0]]]['NICK'],
                             m['stats'][list(m['stats'].keys())[0]]['elo_begin'],
                             m['stats'][list(m['stats'].keys())[0]]['elo_diff'],
@@ -279,11 +278,11 @@ if __name__ == '__main__':
                             m['stats'][list(m['stats'].keys())[1]]['elo_begin'],
                             m['stats'][list(m['stats'].keys())[1]]['elo_diff']]
 
-    df2 = df2.sort_values(by=['id'], ignore_index=True)
+    df_elo_matches = df_elo_matches.sort_values(by=['id'], ignore_index=True)
 
-    results_to_sheet(df[df['ELO_matches'] >= min_matches])
-    results_to_sheet(df2, worksheet=2)
+    results_to_sheet(df[df['ELO_matches'] >= min_matches], worksheet=1)
+    results_to_sheet(df_elo_matches, worksheet=2)
 
     # import matplotlib.pyplot as plt
-    # plt.plot(users['корg']['elo'])
+    # plt.plot(users['111']['elo'])
     # plt.show()

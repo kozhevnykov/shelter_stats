@@ -5,6 +5,9 @@
       <excludeFolder url="file://$MODULE_DIR$/dataHAX" />
       <excludeFolder url="file://$MODULE_DIR$/.ipynb_checkpoints" />
       <excludeFolder url="file://$MODULE_DIR$/notebooks/.ipynb_checkpoints" />
+      <excludeFolder url="file://$MODULE_DIR$/sides" />
+      <excludeFolder url="file://$MODULE_DIR$/notebooks" />
+      <excludeFolder url="file://$MODULE_DIR$/vps-logs--ua-1-1--2" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />

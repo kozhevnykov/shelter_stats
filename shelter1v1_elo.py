@@ -7,8 +7,8 @@ from datetime import datetime
 from pprint import pprint
 
 
-game_started = re.compile("((?:\d+\.?){3} \d+:\d+:\d+.\d) : Game started")
-game_stopped = re.compile("((?:\d+\.?){3} \d+:\d+:\d+.\d) : Game stopped")
+game_started = re.compile("((?:\d+\.?){3} \d+:\d+:\d+.\d) : Game started.*")
+game_stopped = re.compile("((?:\d+\.?){3} \d+:\d+:\d+.\d) : Game stopped.*")
 betterlogs = re.compile(
     "(?:\d+\.?){3} \d+:\d+:\d+.\d : 💡 BetterLogs: Joined player.* id: (\d+), name: (.*), ip: \d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}, auth: (.+)")
 betterlogs_geo = re.compile("(?:\d+\.?){3} \d+:\d+:\d+.\d : 💡 BetterLogs: Player .*")
@@ -26,7 +26,7 @@ def results_to_sheet(df, worksheet=1):
     sheet_instance = sheet.get_worksheet(worksheet)
     sheet_instance.clear()
     sheet_instance.insert_rows([[str(f'last update: {datetime.now()}')]] + [df.columns.values.tolist()] + df.values.tolist(), 1)
-    sheet_instance.format("A2:E2", {
+    sheet_instance.format("A2:H2", {
         "backgroundColor": {
             "red": 0.6,
             "green": 0.1,
@@ -81,9 +81,9 @@ def match_result(match):
                 goals[1] += 1
             else:
                 goals[0] += 1
-    if goals[0] > goals[1]:
+    if goals[0] > goals[1] and goals[0] >= 2:
         return 1
-    elif goals[0] < goals[1]:
+    elif goals[0] < goals[1] and goals[1] >= 2:
         return 2
 
     return 0
@@ -205,14 +205,14 @@ def win_streak_calc(elos):
 
 if __name__ == '__main__':
     match_id = 0
-    min_matches = 3
+    min_matches = 10
     current_match = {'status': '', 'id': -1, 'logs': []}
     db_matches = []
     stack_players = {}
     players = {}
 
     folder = 'vps-logs--ua-1-1--2/hax/out'
-    for filename in [f for f in sorted(os.listdir(folder)) if f >= 'out__2023-12-23_23-59-00.log']:
+    for filename in [f for f in sorted(os.listdir(folder)) if f >= 'out__2024-04-01_23-59-00.log'] + ['out.log']:
         f = os.path.join(folder, filename)
         if filename == '.DS_Store':
             continue
@@ -223,7 +223,7 @@ if __name__ == '__main__':
 
     stats = get_stats_from_db_matches(db_matches)
     users, users_invert = get_users_from_players(players)
-    blacklist = {}
+    blacklist = {'Vh2iYyJEP3DxxnmDTBwMe1fxbm47EhbttdHEsUVaIOA': 'l1ch'}
 
     # calculating elo for each match
     for i in range(len(db_matches)):
@@ -249,7 +249,7 @@ if __name__ == '__main__':
     for user in users:
         users[user]['NICK'] = user
         users[user]['ELO'] = users[user]['elo'][-1]
-        users[user]['ELO_matches'] = len(users[user]['elo']) - 1
+        users[user]['matches'] = len(users[user]['elo']) - 1
         users[user]['ALL matches'] = 0
         users[user]['wins'] = 0
         users[user]['win-streak'] = win_streak_calc(users[user]['elo'])
@@ -258,19 +258,19 @@ if __name__ == '__main__':
                 users[user]['ALL matches'] += stats[idkey]['matches']
                 users[user]['wins'] += stats[idkey]['wins']
         if users[user]['ALL matches'] > 0:
-            users[user]['ALL win-rate %'] = users[user]['wins'] / users[user]['ALL matches']
+            users[user]['WR %'] = users[user]['wins'] / users[user]['ALL matches']
         else:
-            users[user]['ALL win-rate %'] = None
+            users[user]['WR %'] = None
 
-    df = pd.DataFrame(users).T.sort_values(by=['ELO'], ascending=False, ignore_index=True)
-    df = df[['NICK','ELO', 'ELO_matches', 'ALL win-rate %', 'win-streak']]
+    df = pd.DataFrame(users).T.sort_values(by=['ELO'], ascending=False)
+    df = df[['NICK','ELO', 'matches', 'WR %', 'win-streak']]
 
     df_elo_matches = pd.DataFrame({'id':[], 'started_at': [],
                         'p1': [], 'p1_elo_begin': [], 'p1_elo_diff': [],
                         'p2': [], 'p2_elo_begin': [], 'p2_elo_diff': []})
     for m in db_matches:
         if m['status'] == 'ELO stopped':
-            df_elo_matches.loc[len(df_elo_matches)] = [m['id'], m['start_at'].strftime('%d.%m.%Y'),
+            df_elo_matches.loc[len(df_elo_matches)] = [m['id'], m['start_at'].strftime('%d.%m.%Y %H'),
                             users[users_invert[list(m['stats'].keys())[0]]]['NICK'],
                             m['stats'][list(m['stats'].keys())[0]]['elo_begin'],
                             m['stats'][list(m['stats'].keys())[0]]['elo_diff'],
@@ -278,11 +278,17 @@ if __name__ == '__main__':
                             m['stats'][list(m['stats'].keys())[1]]['elo_begin'],
                             m['stats'][list(m['stats'].keys())[1]]['elo_diff']]
 
-    df_elo_matches = df_elo_matches.sort_values(by=['id'], ignore_index=True)
+    df_elo_matches = df_elo_matches.sort_values(by=['id'], ignore_index=True, ascending=False)
 
-    results_to_sheet(df[df['ELO_matches'] >= min_matches], worksheet=1)
+    results_to_sheet(df[df['matches'] >= min_matches], worksheet=1)
     results_to_sheet(df_elo_matches, worksheet=2)
+
+    # import json
+    # with open("dataHAX/elo1x1.json", 'w') as file:
+    #     json.dump(db_matches, file, indent=4)
 
     # import matplotlib.pyplot as plt
     # plt.plot(users['111']['elo'])
     # plt.show()
+
+    #df_temp.drop(columns='elo').sort_values(by=['ELO_matches'], ascending=False).to_csv('dataHAX/elo.csv')

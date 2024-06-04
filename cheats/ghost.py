@@ -5,7 +5,7 @@ keys = ['i','j','k','l']
 status = False
 
 def get_direction(k):
-    keys = ['i', 'j', 'k', 'l']
+    # keys = ['i', 'j', 'k', 'l']
     if k == 'i':
         return 0
     elif k == 'j':

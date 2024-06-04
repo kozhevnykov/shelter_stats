@@ -4,7 +4,6 @@ from oauth2client.service_account import ServiceAccountCredentials
 import os, re
 import operator
 from datetime import datetime
-from pprint import pprint
 
 
 game_started = re.compile("((?:\d+\.?){3} \d+:\d+:\d+.\d) : Game started.*")
@@ -282,13 +281,3 @@ if __name__ == '__main__':
 
     results_to_sheet(df[df['matches'] >= min_matches], worksheet=1)
     results_to_sheet(df_elo_matches, worksheet=2)
-
-    # import json
-    # with open("dataHAX/elo1x1.json", 'w') as file:
-    #     json.dump(db_matches, file, indent=4)
-
-    # import matplotlib.pyplot as plt
-    # plt.plot(users['111']['elo'])
-    # plt.show()
-
-    #df_temp.drop(columns='elo').sort_values(by=['ELO_matches'], ascending=False).to_csv('dataHAX/elo.csv')
